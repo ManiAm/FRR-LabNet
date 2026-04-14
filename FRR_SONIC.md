@@ -70,15 +70,43 @@ Because SONiC relies on a central Redis database (the ConfigDB) as its "single s
 
 ### Unified Mode (The Default & Recommended Path)
 
-In Unified Mode, the SONiC database is in complete control. You configure your routing using SONiC's native CLI (Klish) or automation tools, and SONiC ensures FRR stays perfectly aligned.
+In Unified Mode, CONFIG_DB is the single source of truth. The user configures the switch through the SONiC CLI (Click or Klish), and every command is written to CONFIG_DB.
 
-- **At Boot**: A tool called `sonic-cfggen` reads the saved SONiC configuration and generates the initial startup files for FRR.
+```mermaid
+%%{init: {"flowchart": {"diagramPadding": 200}}}%%
+graph TD
+    subgraph sonic["SONiC Switch"]
 
-- **At Runtime**: A background daemon called `frrcfgd` (or `bgpcfgd` in older versions) constantly monitors the Redis database. If you change a routing policy, `frrcfgd` instantly detects it, translates it, and pushes the change live into the FRR container.
+        other["other subscribers<br/>(teamd, lldp, snmp, *mgrd, ...)"]
 
-<img src="pics/unified.png" alt="segment" width="700">
+        cli["SONiC CLI<br/>(Click / Klish)"]
+        config_db[("CONFIG_DB<br/>(Redis)")]
 
-You can still use the `vtysh` to look at the routing table or test things, but any configurations made directly in `vtysh` will not be saved permanently.
+        subgraph bgp["bgp container"]
+            frrcfgd["frrcfgd / bgpcfgd"]
+            frr["FRR daemons<br/>(bgpd, ospfd, zebra, ...)"]
+            vtysh["vtysh"]
+        end
+
+        cli -- "config commands" --> config_db
+        config_db -- "routing config" --> frrcfgd
+        frrcfgd -- "pushes config" --> frr
+        config_db -- "all other config" --> other
+        vtysh -. "direct config (not persistent)" .-> frr
+    end
+```
+
+**At Boot:** A tool called `sonic-cfggen` reads the saved CONFIG_DB and generates the initial FRR startup files (`frr.conf`, `bgpd.conf`, etc.), so the routing daemons come up with the correct configuration without any manual intervention.
+
+**At Runtime:** When a user makes a change through the CLI, CONFIG_DB is updated and its subscribers react:
+
+- For routing configuration (BGP neighbors, OSPF areas, route maps, etc.), a background daemon called `frrcfgd` (or `bgpcfgd` in older versions) monitors CONFIG_DB inside the bgp container. When it detects a routing change, it translates it and pushes the configuration directly into the running FRR daemons. FRR then installs the resulting routes through the FPM pipeline described in the previous section.
+
+- All other configuration (ports, interfaces, VLANs, LAG, LLDP, SNMP, DHCP, system settings, etc.) is picked up by their respective subscribers. Each watches CONFIG_DB and applies changes within its own scope.
+
+You can still use `vtysh` to inspect the routing table or test configuration changes (shown as the dashed line in the diagram), but any changes made through `vtysh` bypass CONFIG_DB entirely. This means they will not survive a reboot or a container restart — only configuration that flows through CONFIG_DB is persistent.
+
+
 
 ### Split Mode (For Advanced Use Cases)
 
