@@ -70,7 +70,7 @@ Because SONiC relies on a central Redis database (the ConfigDB) as its "single s
 
 ### Unified Mode (The Default & Recommended Path)
 
-In Unified Mode, CONFIG_DB is the single source of truth. The user configures the switch through the SONiC CLI (Click or Klish), and every command is written to CONFIG_DB.
+In Unified Mode, `CONFIG_DB` is the single source of truth. The user configures the switch through the SONiC CLI (Click or Klish), and every command is written to `CONFIG_DB`.
 
 ```mermaid
 %%{init: {"flowchart": {"diagramPadding": 200}}}%%
@@ -96,15 +96,15 @@ graph TD
     end
 ```
 
-**At Boot:** A tool called `sonic-cfggen` reads the saved CONFIG_DB and generates the initial FRR startup files (`frr.conf`, `bgpd.conf`, etc.), so the routing daemons come up with the correct configuration without any manual intervention.
+**At Boot:** A tool called `sonic-cfggen` reads the saved `CONFIG_DB` and generates the initial FRR startup files (`frr.conf`, `bgpd.conf`, etc.), so the routing daemons come up with the correct configuration without any manual intervention.
 
-**At Runtime:** When a user makes a change through the CLI, CONFIG_DB is updated and its subscribers react:
+**At Runtime:** When a user makes a change through the CLI, `CONFIG_DB` is updated and its subscribers react:
 
-- For routing configuration (BGP neighbors, OSPF areas, route maps, etc.), a background daemon called `frrcfgd` (or `bgpcfgd` in older versions) monitors CONFIG_DB inside the bgp container. When it detects a routing change, it translates it and pushes the configuration directly into the running FRR daemons. FRR then installs the resulting routes through the FPM pipeline described in the previous section.
+- For routing configuration (BGP neighbors, OSPF areas, route maps, etc.), a background daemon called `frrcfgd` (or `bgpcfgd` in older versions) monitors `CONFIG_DB` inside the bgp container. When it detects a routing change, it translates it and pushes the configuration directly into the running FRR daemons. FRR then installs the resulting routes through the FPM pipeline described in the previous section.
 
-- All other configuration (ports, interfaces, VLANs, LAG, LLDP, SNMP, DHCP, system settings, etc.) is picked up by their respective subscribers. Each watches CONFIG_DB and applies changes within its own scope.
+- All other configuration (ports, interfaces, VLANs, LAG, LLDP, SNMP, DHCP, system settings, etc.) is picked up by their respective subscribers. Each watches `CONFIG_DB` and applies changes within its own scope.
 
-You can still use `vtysh` to inspect the routing table or test configuration changes (shown as the dashed line in the diagram), but any changes made through `vtysh` bypass CONFIG_DB entirely. This means they will not survive a reboot or a container restart — only configuration that flows through CONFIG_DB is persistent.
+You can still use `vtysh` to inspect the routing table or test configuration changes (shown as the dashed line in the diagram), but any changes made through `vtysh` bypass `CONFIG_DB` entirely. This means they will not survive a reboot or a container restart — only configuration that flows through `CONFIG_DB` is persistent.
 
 
 

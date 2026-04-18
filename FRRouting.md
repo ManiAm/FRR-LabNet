@@ -177,7 +177,7 @@ And enable/disable daemons. For example, you can enable OSPF daemon by setting `
 systemctl restart frr
 ```
 
-`vtysh` is a CLI shell provided by FRR that allows network administrators to interact with multiple FRR daemons through a single, unified command interface. It is modeled after the CLI used in many enterprise-grade networking devices, making it familiar to network engineers.
+Open `vtysh` CLI shell:
 
 ```bash
 sudo vtysh
