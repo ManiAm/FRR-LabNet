@@ -3,9 +3,7 @@
 
 This project is a hands-on lab for learning FRRouting (FRR) using Docker containers. It spins up a small multi-homed topology with three containers running OSPF, letting you observe route learning, kernel route installation, and end-to-end forwarding without needing physical hardware. The setup is fully automated: build the image, bring up the containers, and OSPF converges on its own.
 
-- For background on FRR itself see [FRRouting.md](FRRouting.md).
-- For details on how FRR is integrated within the SONiC see [FRR_SONIC.md](FRR_SONIC.md).
-
+> For background on FRR itself see [FRRouting.md](FRRouting.md).
 
 
 ## FRR Test Setup
