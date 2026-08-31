@@ -1,189 +1,258 @@
-
 # FRRouting
 
-FRR runs on all modern *NIX operating systems, including Linux and the BSDs, and is distributed under GPLv2. You can check the feature matrix in [here](https://docs.frrouting.org/en/stable-10.2/about.html#feature-matrix). FRR git repository is in [here](https://github.com/FRRouting/frr).
+FRRouting (FRR) is an open-source routing software suite for Linux and other Unix-like operating systems, including the BSDs. It implements the control plane for IP routing protocols, enabling a standard Linux machine to function as a full-featured network router. FRR is distributed under the GPLv2 license.
 
-FRR is widely used in network environments for its flexibility, performance, and support for a broad range of routing protocols. It is designed to be modular, allowing users to enable or disable specific routing protocols as needed. It integrates well with the Linux networking stack, leveraging its capabilities to provide efficient and scalable routing solutions.
+FRR is actively used in production by hundreds of companies, universities, research labs, and governments worldwide. It is maintained as part of the Linux Foundation's networking projects, with extensive documentation and an active community supporting both beginners and experienced network engineers.
 
-FRR is maintained by a community of developers and is part of the Linux Foundation's networking projects. It has extensive documentation and active community support, making it accessible for both beginners and experienced network engineers. It is actively used in production by hundreds of companies, universities, research labs and governments.
+You can explore the feature matrix [here](https://docs.frrouting.org/en/stable-10.2/about.html#feature-matrix) and the source code on [GitHub](https://github.com/FRRouting/frr).
 
-FRR started as a fork of [Quagga](https://github.com/Quagga/quagga) in 2016 due to perceived stagnation in Quagga's development. Quagga is an open-source routing software that was a fork of the older Zebra project. It has been used widely for implementing network routing protocols in Unix-based systems. It supports essential routing protocols like BGP, OSPF, RIP, and IS-IS but lacks some of the newer features and improvements found in FRR.
+### History
 
+FRR started as a fork of [Quagga](https://github.com/Quagga/quagga) in 2016. Quagga was itself a fork of the earlier Zebra routing project. While Quagga supported essential protocols like BGP, OSPF, RIP, and IS-IS, its development had largely stagnated. FRR was created to continue active development, modernize the codebase, and add support for newer protocols and features.
 
 
 ## Data Plane vs. Control Plane
 
-To truly grasp how FRR functions, it helps to view networking through a fundamental division of labor: the separation of the control plane and the data plane.
+Understanding FRR requires grasping a fundamental networking concept: the separation between the **control plane** and the **data plane**. These two planes divide the work of routing into distinct responsibilities.
 
-### The Linux Kernel: Data Plane
+- The **control plane** decides *where* traffic should go by exchanging routing information with other routers and computing the best paths.
+- The **data plane** performs the actual *forwarding* of packets based on those decisions.
 
-At the heart of the operation is your Linux operating system, which acts as the data plane. The kernel is responsible for the actual, high-speed movement of data. Whenever a network packet arrives at a physical or virtual network interface, the kernel consults its internal routing table to determine the correct exit interface. It handles the heavy lifting of packet forwarding, ensuring data reaches its next hop efficiently. However, it operates strictly on the information it has been given; it requires an accurate, up-to-date routing table to make correct forwarding decisions.
+### The Linux Kernel (Data Plane)
 
-### FRRouting: Control Plane
+The Linux kernel acts as the data plane. When a network packet arrives at an interface, the kernel consults its routing table to determine the correct outgoing interface and forwards the packet accordingly. The kernel handles packet forwarding at high speed, but it relies entirely on its routing table being accurate and up to date — it does not discover routes on its own.
 
-FRR operates entirely in the control plane as a modular suite of userspace daemons. It does not forward packets itself. Its role is protocol communication and path computation — it runs routing protocols (such as OSPF, BGP, or IS-IS) with neighboring routers, exchanging information about the broader network topology. Once FRR determines the optimal paths to each destination, it programs those routes directly into the Linux kernel’s routing table.
+### FRRouting (Control Plane)
 
+FRR operates as the control plane. It runs routing protocols (such as OSPF, BGP, or IS-IS) to exchange topology information with neighboring routers. After computing the optimal paths to each destination, FRR programs those routes into the Linux kernel's routing table. FRR itself never touches the packets — it only instructs the kernel on how to forward them.
 
 
 ## Netlink and Zebra
 
-Now that we know FRR learns the routes and the Linux kernel forwards the traffic, how do they communicate?
+The previous sections established that FRR learns routes (control plane) and the Linux kernel forwards traffic (data plane). This section explains how the two communicate.
 
 ### Netlink (The Communication Channel)
 
-FRR and the Linux kernel operate in two separate memory domains. The kernel runs in kernel space, a protected execution environment, while FRR runs in userspace. Because they are separated by this privilege boundary, they require a structured inter-process communication mechanism to exchange routing information.
+FRR runs in **userspace** (ordinary application memory), while the Linux kernel runs in **kernel space** (a protected, privileged memory environment). Because they operate in separate memory domains separated by a privilege boundary, they need a structured communication mechanism to exchange routing information.
 
-That mechanism is Netlink. Netlink is a high-performance, bidirectional socket-based IPC built into the Linux kernel. It provides a structured messaging interface between userspace processes and the kernel networking subsystem. Communication flows in both directions:
+That mechanism is **Netlink** — a high-performance, bidirectional socket interface built into the Linux kernel for communication between userspace processes and kernel subsystems. Messages flow in both directions:
 
 - **FRR → Kernel:** Install, update, or delete routes in the kernel routing table.
 - **Kernel → FRR:** Notify FRR of interface state changes, address additions/removals, and other network events.
 
 ### Zebra (The Route Manager)
 
-FRR is modular, with each routing protocol implemented as a separate daemon. When multiple protocols (such as OSPF and BGP) are running concurrently, their route updates must be coordinated before being pushed to the kernel. This is the role of the core daemon called Zebra.
+FRR is modular — each routing protocol runs as a separate process called a **daemon** (a long-running background service in Unix/Linux systems). When multiple protocol daemons (such as OSPF and BGP) run simultaneously, their route updates must be coordinated before being pushed to the kernel. This coordination is handled by a central daemon called **Zebra**.
 
-- Individual protocol daemons (like ospfd or bgpd) calculate their routes and hand them to Zebra.
-- Zebra selects the best route when multiple protocols offer paths to the same destination, based on administrative distance.
-- Zebra is the sole daemon that communicates with the kernel via Netlink to install the selected routes.
+Zebra acts as FRR's internal route manager:
 
-<img src="pics/frr-arch.png" alt="segment" width="500">
+1. Protocol daemons (like `ospfd` or `bgpd`) calculate their best routes and submit them to Zebra.
+2. When multiple protocols offer routes to the same destination, Zebra selects the best one using **administrative distance** (explained in the next section).
+3. Zebra is the only daemon that communicates with the kernel via Netlink to install the selected routes.
 
+<img src="pics/frr-arch.png" alt="FRR Architecture" width="650">
+
+
+## Administrative Distance
+
+When multiple routing protocols each provide a route to the same destination, Zebra must choose which one to install. It does so using **administrative distance** (AD) — a numeric priority value assigned to each routing source. A lower AD indicates a more trusted source. For example, if both OSPF (AD 110) and RIP (AD 120) advertise a route to `10.1.0.0/24`, Zebra selects the OSPF route because it has the lower AD.
+
+Common default values in FRR:
+
+| Source     | Default AD |
+| ---------- | ---------- |
+| Connected  | 0          |
+| Static     | 1          |
+| eBGP       | 20         |
+| EIGRP      | 90         |
+| OSPF       | 110        |
+| IS-IS      | 115        |
+| RIP        | 120        |
+| iBGP       | 200        |
+
+
+## RIB and FIB
+
+The RIB and FIB are two routing tables that make the control plane / data plane separation concrete.
+
+<img src="pics/RIB-FIB.png" alt="FRR Architecture" width="700">
+
+### RIB (Routing Information Base)
+
+The RIB is the control plane's routing table, maintained by Zebra. It stores every route that any source has offered — OSPF-learned routes, BGP-learned routes, static routes, directly connected interfaces, and more. When multiple sources provide a route to the same destination, Zebra compares their administrative distance and selects the best one. The winning route is marked with `>` (selected) in the `show ip route` output and is installed into the FIB.
+
+You can view the RIB with:
+
+```bash
+frr# show ip route
+```
+
+### FIB (Forwarding Information Base)
+
+The FIB is the data plane's routing table — the table the Linux kernel actually consults when a packet arrives and needs to be forwarded. It contains only the winning routes from the RIB: the entries that Zebra has installed into the kernel via Netlink.
+
+Routes present in the FIB are marked with `*` (FIB route) in the `show ip route` output. You can also view the FIB directly through the kernel:
+
+```bash
+ip route
+```
+
+### How They Work Together
+
+```
+Protocol daemons ──► Zebra (RIB) ──Netlink──► Linux Kernel (FIB) ──► forwards packets
+(ospfd, bgpd, …)     selects best              stores winning        looks up destination,
+                      route per                 routes for            sends packet out the
+                      destination               forwarding            correct interface
+```
+
+1. Each protocol daemon (ospfd, bgpd, etc.) calculates its routes and submits them to Zebra.
+2. Zebra stores all candidate routes in the RIB and selects the best route for each destination.
+3. Zebra programs the selected routes into the kernel's FIB via Netlink.
+4. When a packet arrives, the kernel looks up the destination in the FIB and forwards it accordingly.
+
+The RIB may contain routes that are *not* in the FIB — for example, a less-preferred BGP route that lost to an OSPF route for the same prefix. These backup routes remain in the RIB so that if the preferred route is withdrawn, Zebra can immediately promote the next-best route to the FIB without waiting for a full protocol re-convergence.
 
 
 ## FRR Protocol Daemons
 
-Because FRR is modular, if one routing protocol crashes, it won't take down the others. You only turn on the daemons you actually need. Here is the breakdown of the daemons available in FRR:
+Because each protocol runs as an independent daemon, a crash in one does not affect the others. You only enable the daemons you need.
 
-Core Infrastructure
+An **Autonomous System (AS)** is a network or group of networks under a single administrative authority, such as a company or ISP. Routing protocols are categorized based on whether they operate within a single AS or between multiple ASes:
+
+- **IGP (Interior Gateway Protocol):** Operates within a single AS to distribute routes among internal routers.
+- **EGP (Exterior Gateway Protocol):** Operates between different ASes to exchange routes across organizational boundaries.
+
+### Core Infrastructure
 
 | Daemon       | Description                                                                                                                                 |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | **zebra**    | Core routing manager. Installs routes into the Linux kernel, manages interfaces, VRFs, nexthops, and provides an API for all other daemons. |
-| **watchfrr** | Supervisor process that monitors and restarts FRR daemons if they crash.                                                                    |
-| **staticd**  | Handles static routes configuration and pushes them to zebra.                                                                               |
-| **mgmtd**    | Centralized management daemon (newer architecture replacing older vtysh-only management approach).                                          |
+| **watchfrr** | Supervisor daemon that monitors all other FRR daemons and automatically restarts any that crash.                                            |
+| **staticd**  | Handles static route configuration and submits static routes to Zebra.                                                                     |
+| **mgmtd**    | Centralized management daemon (newer architecture for unified daemon management).                                                           |
 
-IGP – Distance Vector Protocols
+### IGP — Distance-Vector Protocols
 
-| Daemon     | Description                                                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ripd**   | RIP for IPv4. Classic distance-vector protocol using hop count metric (max 15).                                                                          |
-| **ripngd** | RIPng for IPv6. Same distance-vector behavior as RIP but for IPv6.                                                                                       |
-| **babeld** | Babel protocol. Advanced distance-vector protocol with fast convergence and loop-avoidance improvements. Often used in mesh and dual-stack environments. |
-| **eigrpd** | EIGRP. Technically an advanced distance-vector. Uses DUAL algorithm and maintains topology information.                                                  |
+Distance-vector protocols determine the best path based on a simple metric (typically hop count) and share routing information only with directly connected neighbors.
 
-IGP – Link-State Protocols
+| Daemon     | Description                                                                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ripd**   | RIP for IPv4. Classic distance-vector protocol using hop count as its metric (maximum 15 hops).                                                           |
+| **ripngd** | RIPng for IPv6. Same distance-vector approach as RIP, adapted for IPv6.                                                                                   |
+| **babeld** | Babel protocol. An advanced distance-vector protocol with fast convergence and loop-avoidance mechanisms. Often used in mesh and dual-stack environments.  |
+| **eigrpd** | EIGRP (Enhanced Interior Gateway Routing Protocol). Uses the DUAL algorithm and maintains topology information for faster convergence than classic RIP.    |
 
-| Daemon      | Description                                                                                  |
-| ----------- | -------------------------------------------------------------------------------------------- |
-| **ospfd**   | OSPFv2 (IPv4) link-state routing protocol. Builds LSDB and runs SPF.                         |
-| **ospf6d**  | OSPFv3 (IPv6) link-state routing protocol.                                                   |
-| **isisd**   | IS-IS link-state routing protocol supporting IPv4 and IPv6.                                  |
-| **fabricd** | OpenFabric. Lightweight IS-IS–derived link-state protocol optimized for data center fabrics. |
+### IGP — Link-State Protocols
 
-EGP - Path Vector Protocols
+Link-state protocols build a complete map of the network topology called a Link-State Database (LSDB). Each router independently computes the shortest path to every destination using the SPF (Shortest Path First) algorithm.
 
-| Daemon   | Protocol | Description                                                                                       |
-| -------- | -------- | ------------------------------------------------------------------------------------------------- |
-| **bgpd** | BGP      | Border Gateway Protocol for inter-domain routing, supports iBGP, eBGP, EVPN, VPNv4/v6, MPLS, etc. |
+| Daemon      | Description                                                                          |
+| ----------- | ------------------------------------------------------------------------------------ |
+| **ospfd**   | OSPFv2 for IPv4. Builds an LSDB and runs SPF to compute shortest paths.             |
+| **ospf6d**  | OSPFv3 for IPv6.                                                                     |
+| **isisd**   | IS-IS link-state routing protocol supporting both IPv4 and IPv6.                     |
+| **fabricd** | OpenFabric. A lightweight IS-IS variant optimized for data center fabric topologies.  |
 
-Fast Failure Detection Protocols
+### EGP — Path-Vector Protocol
 
-| Daemon   | Protocol | Description                                                                                           |
-| -------- | -------- | ----------------------------------------------------------------------------------------------------- |
-| **bfdd** | BFD      | Bidirectional Forwarding Detection. Lightweight protocol for fast failure detection between routers.  |
+| Daemon   | Description                                                                                                     |
+| -------- | --------------------------------------------------------------------------------------------------------------- |
+| **bgpd** | BGP (Border Gateway Protocol). The standard protocol for inter-AS routing, supporting iBGP, eBGP, EVPN, VPNv4/v6, MPLS, and more. |
 
-Multicast Routing
+### Fast Failure Detection
+
+| Daemon   | Description                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| **bfdd** | BFD (Bidirectional Forwarding Detection). Lightweight protocol for sub-second failure detection between routers.  |
+
+### Multicast Routing
 
 | Daemon    | Description                                                                       |
 | --------- | --------------------------------------------------------------------------------- |
 | **pimd**  | PIM-SM (Protocol Independent Multicast – Sparse Mode) for IPv4 multicast routing. |
 | **pim6d** | PIM for IPv6 multicast.                                                           |
 
-MPLS and Segment Routing
+### MPLS and Segment Routing
 
 | Daemon    | Description                                                    |
 | --------- | -------------------------------------------------------------- |
 | **ldpd**  | LDP (Label Distribution Protocol) for MPLS label distribution. |
 | **pathd** | Segment Routing (SR-TE) path computation and management.       |
 
-Policy based Routing
+### Policy-Based Routing
 
-| Daemon   | Description                                                                                                                                                        |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **pbrd** | Applies match/action rules (source IP, destination IP, ports, interfaces, DSCP, etc.) to steer traffic based on policy rather than pure destination-based routing. |
+| Daemon   | Description                                                                                                                            |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **pbrd** | Steers traffic based on policy rules (source IP, destination IP, ports, DSCP, etc.) rather than destination-only routing table lookups. |
 
-Overlay / NBMA & Tunneling
+### Overlay and Tunneling
 
-| Daemon    | Description                                                                                                                              |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **nhrpd** | Next Hop Resolution Protocol daemon. Used in DMVPN-style hub-and-spoke or NBMA overlay networks to dynamically resolve tunnel endpoints. |
+| Daemon    | Description                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **nhrpd** | NHRP (Next Hop Resolution Protocol). Used in DMVPN-style hub-and-spoke overlays to dynamically resolve tunnel endpoints. |
 
-High Availability
+### High Availability
 
-| Daemon    | Description                                                                |
-| --------- | -------------------------------------------------------------------------- |
-| **vrrpd** | Implements VRRP (Virtual Router Redundancy Protocol) for gateway failover. |
+| Daemon    | Description                                                                        |
+| --------- | ---------------------------------------------------------------------------------- |
+| **vrrpd** | VRRP (Virtual Router Redundancy Protocol) for automatic gateway failover.          |
 
-SNMP / Management
+### Monitoring
 
-| Daemon    | Description                                                                                        |
-| --------- | -------------------------------------------------------------------------------------------------- |
-| **snmpd** | SNMP support for FRR (if enabled).                                                                 |
+| Daemon    | Description                                   |
+| --------- | --------------------------------------------- |
+| **snmpd** | SNMP support for FRR (if compiled with SNMP). |
 
-Testing and Route Injection Tools
+### Testing and Debugging
 
-| Daemon     | Description                                                                 |
-| ---------- | --------------------------------------------------------------------------- |
-| **sharpd** | Used for testing and injecting routes (primarily debugging/testing).        |
-
-
-
-## Management and Configuration (vtysh)
-
-All of the FRR daemons can be managed through a single integrated user interface shell called [vtysh](https://docs.frrouting.org/projects/dev-guide/en/latest/vtysh.html). vtysh connects to each daemon through a UNIX domain socket and then works as a proxy for user input. If you have ever used an enterprise hardware router (like Cisco), vtysh feels exactly the same.
-
-In addition to a unified frontend, vtysh also provides the ability to configure all the daemons using a single configuration file through the integrated configuration mode. This avoids the overhead of maintaining a separate configuration file for each daemon.
+| Daemon     | Description                                                         |
+| ---------- | ------------------------------------------------------------------- |
+| **sharpd** | Internal testing daemon for route injection and debugging purposes. |
 
 
+## Installation
 
-## FRR Installation
+FRR can be installed from [prebuilt packages](https://deb.frrouting.org/) or compiled directly from [source](https://docs.frrouting.org/en/latest/installation.html#from-source).
 
-You can install FRR from [packages](https://deb.frrouting.org/) or install it directly from the [source](https://docs.frrouting.org/en/latest/installation.html#from-source).
-
-Once the installation is finished, make sure the frr service is up and running:
+After installation, verify the FRR service is running:
 
 ```bash
 systemctl status frr
 ```
 
-The `watchfrr`, `zebra`, and `static` daemons are always running. The `watchfrr` is a daemon that monitors the health and status of the other FRR daemons. It is primary responsible for monitoring, restarting, and notification. The `static` daemon is responsible for managing static routes within the FRR suite. It interacts with `zebra` to ensure that the static routes are properly integrated with other dynamic routing protocols and the overall routing table.
-
-Add your username into the frr group, and restart the system for the changes to take effect.
-
-```bash
-sudo usermod -a -G frr <username>
-```
-
-Open the FRR daemon file with the editor of your choice:
+The `watchfrr`, `zebra`, and `staticd` daemons run by default. To enable additional protocol daemons, edit the FRR daemons configuration file:
 
 ```bash
 sudo nano /etc/frr/daemons
 ```
 
-And enable/disable daemons. For example, you can enable OSPF daemon by setting `ospf=yes` in that file. Once you save the file, restart the frr service.
+Set the desired daemon to `yes` (for example, `ospfd=yes` to enable OSPF), then restart the service:
 
 ```bash
 systemctl restart frr
 ```
 
-Open `vtysh` CLI shell:
+Add your user to the `frr` group so you can interact with FRR without root privileges. A logout or reboot is required for the change to take effect:
+
+```bash
+sudo usermod -a -G frr <username>
+```
+
+
+## Management and Configuration (vtysh)
+
+All FRR daemons are managed through a unified command-line interface called **vtysh**. It connects to each daemon's UNIX domain socket and acts as a single entry point for configuration and monitoring. If you have used a Cisco or similar enterprise router CLI, vtysh will feel familiar.
+
+vtysh also supports a single unified configuration file, eliminating the need to maintain separate configuration files for each daemon.
+
+To open the vtysh shell:
 
 ```bash
 sudo vtysh
 ```
 
-Display the list of interfaces:
+Display network interfaces:
 
 ```bash
 frr# show interface brief
@@ -195,7 +264,7 @@ enp0s3          up      default      10.0.2.15/24
 lo              up      default
 ```
 
-Display the current routing table:
+Display the routing table:
 
 ```bash
 frr# show ip route

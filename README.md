@@ -47,7 +47,7 @@ Key terms used in this lab:
 
 The lab creates three containers connected by two Docker bridge networks:
 
-<img src="pics/frr-setup.png" alt="Lab topology diagram" width="450">
+<img src="pics/frr-setup.png" alt="Lab topology diagram" width="500">
 
 | Container | Bridge Networks | Interfaces     | Subnets                      | Loopback   |
 | --------- | --------------- | -------------- | ---------------------------- | ---------- |
